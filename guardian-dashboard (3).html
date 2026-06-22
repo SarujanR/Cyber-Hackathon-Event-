@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IoT Guardian — Smart Agriculture</title>
+<style>
+  :root { --bg:#0f1115; --card:#171a21; --line:#262b36; --txt:#e6e9ef; --mut:#8b94a7;
+          --ok:#27c46b; --bad:#ff4d4f; --acc:#f5a623; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--txt); }
+  .wrap { max-width:980px; margin:0 auto; padding:24px; }
+  h1 { font-size:20px; font-weight:600; margin:0 0 4px; }
+  .sub { color:var(--mut); font-size:13px; margin-bottom:14px; }
+  .livebar { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--mut); margin-bottom:18px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--bad); }
+  .dot.on { background:var(--ok); animation:pulse 1.6s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(39,196,107,.45)} 70%{box-shadow:0 0 0 8px rgba(39,196,107,0)} 100%{box-shadow:0 0 0 0 rgba(39,196,107,0)} }
+  .grid { display:grid; grid-template-columns:1.25fr 1fr; gap:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; }
+  .label { color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
+  .big { font-size:34px; font-weight:600; margin-top:4px; }
+  .row { display:flex; gap:24px; margin-top:14px; }
+  .row div span { display:block; font-size:22px; font-weight:600; }
+  .decision { margin-top:16px; padding:12px 16px; border-radius:10px; font-weight:600; font-size:18px; text-align:center; }
+  .irrigate { background:rgba(245,166,35,.15); color:var(--acc); border:1px solid rgba(245,166,35,.4); }
+  .hold { background:rgba(39,196,107,.12); color:var(--ok); border:1px solid rgba(39,196,107,.35); }
+  .stats { display:flex; gap:14px; margin-top:10px; }
+  .stat { flex:1; text-align:center; }
+  .stat .n { font-size:28px; font-weight:700; }
+  .n.ok { color:var(--ok); } .n.bad { color:var(--bad); }
+  .log { margin-top:16px; max-height:300px; overflow-y:auto; }
+  .entry { border-left:3px solid var(--line); padding:8px 12px; margin-bottom:6px; font-size:13px; border-radius:0 6px 6px 0; background:#12151c; }
+  .entry.accept { border-left-color:var(--ok); }
+  .entry.reject { border-left-color:var(--bad); }
+  .entry .tag { font-weight:600; }
+  .entry.accept .tag { color:var(--ok); }
+  .entry.reject .tag { color:var(--bad); }
+  .entry .meta { color:var(--mut); }
+  .raw { margin-top:16px; }
+  .rawbox { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; line-height:1.8;
+            word-break:break-all; background:#0b0d11; border:1px solid var(--line); border-radius:10px; padding:14px; margin-top:8px; }
+  .rawbox .k { color:var(--mut); } .rawbox .v { color:#cdd3df; }
+  .arrowrow { display:flex; align-items:center; justify-content:center; gap:10px; color:var(--mut); font-size:12px; margin:10px 0 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>IoT Guardian — Smart Agriculture</h1>
+  <div class="sub">Every reading must prove it is <b>authentic</b> (AES-256-GCM tag) and <b>fresh</b> (sequence) before it can drive irrigation.</div>
+  <div class="livebar"><span class="dot" id="dot"></span><span id="status">connecting…</span></div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label">Latest verified reading (decrypted)</div>
+      <div class="big" id="soil">—</div>
+      <div class="row">
+        <div><div class="label">Temp</div><span id="temp">—</span></div>
+        <div><div class="label">Humidity</div><span id="hum">—</span></div>
+        <div><div class="label">Seq</div><span id="seq">—</span></div>
+      </div>
+      <div id="decision" class="decision hold">Awaiting verified data…</div>
+
+      <div class="raw">
+        <div class="label">Same record as stored in Firebase (encrypted)</div>
+        <div class="rawbox" id="raw"><span class="k">waiting for the node to publish…</span></div>
+        <div class="arrowrow">↑ what an attacker sees &nbsp;·&nbsp; ↓ what the Guardian extracts after verifying</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="label">Guardian stats</div>
+      <div class="stats">
+        <div class="stat"><div class="n ok" id="cAccept">0</div><div class="label">Accepted</div></div>
+        <div class="stat"><div class="n bad" id="cReject">0</div><div class="label">Rejected</div></div>
+      </div>
+      <div class="label" style="margin-top:18px;">Verification log</div>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---- CONFIG : EDIT THESE TWO (must match the ESP32 sketch) ----------------
+const FB_URL  = "https://tester1-1f5af-default-rtdb.firebaseio.com";
+const KEY_STR = "0123456789abcdef0123456789abcdef";   // 32 chars = 256-bit key
+// ---------------------------------------------------------------------------
+
+const POLL_MS = 1500;              // refresh interval -> feels live
+const DRY_THRESHOLD = 30;          // soil % below this -> irrigate
+const seen = new Set();            // Firebase push keys already processed
+let lastSeq = -1;                  // freshness watermark for sensor "field-1"
+let nAccept = 0, nReject = 0;
+let cryptoKey = null;
+let lastUpdate = null, connected = false;
+
+function b64ToBytes(s){ const b = atob(s); const u = new Uint8Array(b.length);
+  for (let i=0;i<b.length;i++) u[i]=b.charCodeAt(i); return u; }
+
+async function initKey(){
+  const raw = new TextEncoder().encode(KEY_STR);   // 32 bytes
+  cryptoKey = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
+}
+
+function shorten(s){ return s && s.length > 46 ? s.slice(0,46) + "…" : s; }
+
+function showRaw(rec){
+  document.getElementById("raw").innerHTML =
+    `<span class="k">sensor_id: </span><span class="v">"${rec.sensor_id}"</span><br>` +
+    `<span class="k">nonce: </span><span class="v">"${rec.nonce}"</span><br>` +
+    `<span class="k">ciphertext: </span><span class="v">"${shorten(rec.ciphertext)}"</span><br>` +
+    `<span class="k">tag: </span><span class="v">"${rec.tag}"</span>`;
+}
+
+// STEP 3 : trust validation -------------------------------------------------
+async function verify(rec){
+  let plain;
+  try {
+    const nonce = b64ToBytes(rec.nonce);
+    const ct    = b64ToBytes(rec.ciphertext);
+    const tag   = b64ToBytes(rec.tag);
+    const blob  = new Uint8Array(ct.length + tag.length);
+    blob.set(ct, 0); blob.set(tag, ct.length);
+    const ptBuf = await crypto.subtle.decrypt(
+      { name:"AES-GCM", iv:nonce, tagLength:128 }, cryptoKey, blob);
+    plain = JSON.parse(new TextDecoder().decode(ptBuf));
+  } catch(e){
+    return { ok:false, reason:"TAMPERED — authentication tag failed" };
+  }
+  if (plain.seq <= lastSeq){
+    return { ok:false, reason:"REPLAY — stale sequence " + plain.seq, data:plain };
+  }
+  lastSeq = plain.seq;
+  return { ok:true, data:plain };
+}
+
+function applyDecision(d){
+  document.getElementById("soil").textContent = d.soil + "%";
+  document.getElementById("temp").textContent = d.temp + "°C";
+  document.getElementById("hum").textContent  = d.hum + "%";
+  document.getElementById("seq").textContent  = d.seq;
+  const irrigate = d.soil < DRY_THRESHOLD;
+  const el = document.getElementById("decision");
+  el.className = "decision " + (irrigate ? "irrigate" : "hold");
+  el.textContent = irrigate ? "IRRIGATE — soil is dry" : "HOLD — soil is fine";
+}
+
+function logEntry(accepted, text, meta){
+  if (accepted) nAccept++; else nReject++;
+  document.getElementById("cAccept").textContent = nAccept;
+  document.getElementById("cReject").textContent = nReject;
+  const div = document.createElement("div");
+  div.className = "entry " + (accepted ? "accept" : "reject");
+  div.innerHTML = `<span class="tag">${accepted ? "ACCEPTED" : "REJECTED"}</span> ${text}` +
+                  (meta ? `<div class="meta">${meta}</div>` : "");
+  document.getElementById("log").prepend(div);
+}
+
+async function poll(){
+  try {
+    const res = await fetch(FB_URL + "/readings.json");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    connected = true; lastUpdate = Date.now();
+    if (!data) return;
+    const keys = Object.keys(data);
+    showRaw(data[keys[keys.length - 1]]);   // mirror the newest Firebase record
+    for (const key of keys){
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const rec = data[key];
+      const r = await verify(rec);
+      if (r.ok){
+        applyDecision(r.data);
+        logEntry(true, `reading from ${rec.sensor_id}`,
+                 `seq ${r.data.seq} · soil ${r.data.soil}% · temp ${r.data.temp}°C`);
+      } else {
+        logEntry(false, r.reason, `sensor ${rec.sensor_id}`);
+      }
+    }
+  } catch(e){ connected = false; }
+}
+
+function tickStatus(){
+  const dot = document.getElementById("dot");
+  const status = document.getElementById("status");
+  if (connected && lastUpdate){
+    dot.className = "dot on";
+    const ago = Math.round((Date.now() - lastUpdate) / 1000);
+    status.textContent = "live · connected to Firebase · updated " + ago + "s ago";
+  } else {
+    dot.className = "dot";
+    status.textContent = "not connected — check FB_URL / database rules";
+  }
+}
+
+(async () => {
+  await initKey();
+  setInterval(poll, POLL_MS);
+  setInterval(tickStatus, 1000);
+  poll();
+})();
+</script>
+</body>
+</html>

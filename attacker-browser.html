@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IoT Guardian — Attacker Demo</title>
+<style>
+  :root {
+    --bg: #0c1016;
+    --panel: #151b23;
+    --panel-2: #0f141b;
+    --line: #253042;
+    --text: #e8edf4;
+    --muted: #91a0b5;
+    --good: #2dd4bf;
+    --bad: #ff6b6b;
+    --warn: #f5a524;
+    --accent: #7dd3fc;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    color: var(--text);
+    font-family: Segoe UI, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    background:
+      radial-gradient(circle at top left, rgba(125, 211, 252, 0.18), transparent 28%),
+      radial-gradient(circle at bottom right, rgba(245, 165, 36, 0.12), transparent 24%),
+      var(--bg);
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 28px 18px 40px; }
+  .hero {
+    display: grid;
+    grid-template-columns: 1.3fr 0.7fr;
+    gap: 16px;
+    align-items: end;
+    margin-bottom: 18px;
+  }
+  h1 { margin: 0; font-size: 30px; letter-spacing: -0.02em; }
+  .sub { margin-top: 8px; color: var(--muted); max-width: 64ch; line-height: 1.5; }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: rgba(21, 27, 35, 0.8);
+    color: var(--muted);
+    justify-self: end;
+    backdrop-filter: blur(8px);
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
+  .dot.on { background: var(--good); box-shadow: 0 0 0 6px rgba(45, 212, 191, 0.12); }
+  .grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 16px; }
+  .card {
+    background: linear-gradient(180deg, rgba(21, 27, 35, 0.95), rgba(15, 20, 27, 0.95));
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 20px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  }
+  .label {
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .field { margin-top: 8px; font-size: 15px; color: var(--text); }
+  .field code {
+    display: block;
+    margin-top: 8px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--panel-2);
+    color: #dce5f3;
+    word-break: break-all;
+    font-family: Consolas, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.65;
+  }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+  button {
+    appearance: none;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    padding: 12px 16px;
+    font: inherit;
+    color: white;
+    cursor: pointer;
+    transition: transform 120ms ease, opacity 120ms ease, border-color 120ms ease;
+  }
+  button:hover { transform: translateY(-1px); }
+  button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+  .tamper { background: linear-gradient(135deg, #ef4444, #f97316); }
+  .replay { background: linear-gradient(135deg, #0ea5e9, #2563eb); }
+  .clear { background: transparent; border-color: var(--line); color: var(--text); }
+  .status {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(12, 16, 22, 0.55);
+    border: 1px solid var(--line);
+    color: var(--muted);
+  }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; }
+  .metric {
+    background: rgba(12, 16, 22, 0.4);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+    text-align: center;
+  }
+  .metric .n { font-size: 30px; font-weight: 700; }
+  .metric .n.bad { color: var(--bad); }
+  .metric .n.good { color: var(--good); }
+  .metric .n.warn { color: var(--warn); }
+  .log {
+    margin-top: 18px;
+    max-height: 340px;
+    overflow: auto;
+    display: grid;
+    gap: 10px;
+  }
+  .entry {
+    border: 1px solid var(--line);
+    border-left-width: 4px;
+    border-radius: 14px;
+    padding: 12px 14px;
+    background: rgba(12, 16, 22, 0.55);
+  }
+  .entry .kind { font-weight: 700; }
+  .entry .meta { margin-top: 6px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+  .entry.accept { border-left-color: var(--good); }
+  .entry.reject { border-left-color: var(--bad); }
+  .entry.info { border-left-color: var(--accent); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 860px) {
+    .hero, .grid, .two, .stats { grid-template-columns: 1fr; }
+    .pill { justify-self: start; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <div>
+      <h1>IoT Guardian — Attacker Demo</h1>
+      <div class="sub">This browser page mirrors the Python attacker script. It can inject a forged record or replay the latest stored record into the Firebase endpoint so you can watch the guardian reject it.</div>
+    </div>
+    <div class="pill"><span class="dot" id="dot"></span><span id="conn">idle</span></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label">Target endpoint</div>
+      <div class="field">Firebase Realtime Database URL</div>
+      <div class="field"><code id="fbUrlBox"></code></div>
+
+      <div class="controls">
+        <button class="tamper" id="tamperBtn">Inject tampered reading</button>
+        <button class="replay" id="replayBtn">Replay latest genuine reading</button>
+        <button class="clear" id="clearBtn">Clear log</button>
+      </div>
+
+      <div class="status" id="status">Ready.</div>
+
+      <div class="two" style="margin-top:16px;">
+        <div>
+          <div class="label">Tampered envelope</div>
+          <div class="field"><code id="tamperPreview"></code></div>
+        </div>
+        <div>
+          <div class="label">Latest replay candidate</div>
+          <div class="field"><code id="replayPreview">Waiting for a fetch…</code></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="label">Run stats</div>
+      <div class="stats">
+        <div class="metric"><div class="n good" id="accepted">0</div><div class="label">Accepted actions</div></div>
+        <div class="metric"><div class="n bad" id="rejected">0</div><div class="label">Failed actions</div></div>
+        <div class="metric"><div class="n warn" id="seen">0</div><div class="label">Records fetched</div></div>
+      </div>
+
+      <div class="label" style="margin-top:18px;">Activity log</div>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const FB_URL = "https://tester1-1f5af-default-rtdb.firebaseio.com";
+const tamperedRecord = {
+  sensor_id: "field-1",
+  nonce: btoa(String.fromCharCode(...new Uint8Array(12))),
+  ciphertext: btoa("soil is wet, do NOT irrigate!"),
+  tag: btoa(String.fromCharCode(...new Uint8Array(16)))
+};
+
+const fbUrlBox = document.getElementById("fbUrlBox");
+const tamperPreview = document.getElementById("tamperPreview");
+const replayPreview = document.getElementById("replayPreview");
+const statusBox = document.getElementById("status");
+const dot = document.getElementById("dot");
+const conn = document.getElementById("conn");
+const accepted = document.getElementById("accepted");
+const rejected = document.getElementById("rejected");
+const seen = document.getElementById("seen");
+const log = document.getElementById("log");
+const tamperBtn = document.getElementById("tamperBtn");
+const replayBtn = document.getElementById("replayBtn");
+const clearBtn = document.getElementById("clearBtn");
+
+let okCount = 0;
+let failCount = 0;
+let fetchCount = 0;
+let latestGenuine = null;
+
+function renderPretty(obj) {
+  return JSON.stringify(obj, null, 2);
+}
+
+function setBusy(busy) {
+  tamperBtn.disabled = busy;
+  replayBtn.disabled = busy;
+  conn.textContent = busy ? "working…" : "idle";
+  dot.className = busy ? "dot on" : "dot";
+}
+
+function pushLog(kind, title, meta) {
+  const item = document.createElement("div");
+  item.className = "entry " + kind;
+  item.innerHTML = `<div class="kind">${title}</div>${meta ? `<div class="meta">${meta}</div>` : ""}`;
+  log.prepend(item);
+}
+
+function setStatus(text) {
+  statusBox.textContent = text;
+}
+
+async function postReading(record) {
+  const response = await fetch(FB_URL + "/readings.json", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(record)
+  });
+  if (!response.ok) {
+    throw new Error("HTTP " + response.status + " " + response.statusText);
+  }
+  return response.json();
+}
+
+async function loadLatest() {
+  const response = await fetch(FB_URL + "/readings.json");
+  if (!response.ok) {
+    throw new Error("HTTP " + response.status + " " + response.statusText);
+  }
+  const data = await response.json();
+  fetchCount++;
+  seen.textContent = String(fetchCount);
+
+  if (!data) {
+    latestGenuine = null;
+    replayPreview.textContent = "No readings yet.";
+    return null;
+  }
+
+  const records = Object.values(data);
+  latestGenuine = records[records.length - 1] || null;
+  replayPreview.textContent = latestGenuine ? renderPretty(latestGenuine) : "No replay candidate available.";
+  return latestGenuine;
+}
+
+async function handleTamper() {
+  setBusy(true);
+  try {
+    setStatus("Posting forged reading with invalid tag…");
+    const result = await postReading(tamperedRecord);
+    okCount++;
+    accepted.textContent = String(okCount);
+    pushLog("accept", "Tampered record posted", `Firebase key ${result.name} created. The guardian should reject this payload because the tag is invalid.`);
+    setStatus("Tampered record posted. Open the guardian dashboard to see the reject path.");
+  } catch (error) {
+    failCount++;
+    rejected.textContent = String(failCount);
+    pushLog("reject", "Tamper failed", error.message);
+    setStatus("Tamper request failed: " + error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function handleReplay() {
+  setBusy(true);
+  try {
+    setStatus("Loading latest stored reading…");
+    const latest = await loadLatest();
+    if (!latest) {
+      throw new Error("No readings available to replay yet.");
+    }
+    setStatus("Replaying latest genuine reading…");
+    const result = await postReading(latest);
+    okCount++;
+    accepted.textContent = String(okCount);
+    pushLog("accept", "Replay posted", `Firebase key ${result.name} created from the most recent stored envelope.`);
+    setStatus("Replay posted. The guardian should reject it as stale once it sees the duplicate sequence.");
+  } catch (error) {
+    failCount++;
+    rejected.textContent = String(failCount);
+    pushLog("reject", "Replay failed", error.message);
+    setStatus("Replay request failed: " + error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+function clearLog() {
+  log.innerHTML = "";
+  setStatus("Log cleared.");
+}
+
+fbUrlBox.textContent = FB_URL;
+tamperPreview.textContent = renderPretty(tamperedRecord);
+replayPreview.textContent = "Waiting for a fetch…";
+
+tamperBtn.addEventListener("click", handleTamper);
+replayBtn.addEventListener("click", handleReplay);
+clearBtn.addEventListener("click", clearLog);
+
+loadLatest().then(() => {
+  setStatus("Loaded browser attacker demo. If Firebase blocks requests from the browser, you will see the CORS or rules error here.");
+}).catch(error => {
+  setStatus("Initial fetch failed: " + error.message);
+});
+</script>
+</body>
+</html>
